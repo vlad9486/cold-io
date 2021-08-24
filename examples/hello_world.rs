@@ -34,13 +34,14 @@ impl<const INITIATOR: bool> State for ExampleState<INITIATOR> {
         );
 
         match (*self, proposal.kind) {
-            (Empty, ProposalKind::Wake | ProposalKind::Idle) => {
+            (Empty, ProposalKind::Wake) => {
                 if INITIATOR {
                     Request::default().add_connect(ADDRESS)
                 } else {
                     Request::default().set_source(ConnectionSource::Port(8224))
                 }
             },
+            (Empty, ProposalKind::Idle) => Request::default(),
             (Empty, ProposalKind::OnReadable(addr, once)) => {
                 if !INITIATOR {
                     let mut buf = [0; 13];
