@@ -148,6 +148,12 @@ impl Proposer {
                 self.in_progress.insert(stream.token(), *addr);
             }
         }
+        if let Some(listener) = &mut self.listener {
+            self.poll
+                .registry()
+                .reregister(listener, Self::LISTENER, Interest::READABLE)
+                .expect("bug");
+        }
     }
 
     fn take_events(&mut self) -> Events {
@@ -217,10 +223,6 @@ impl Proposer {
                 if let Some(listener) = self.listener.as_mut() {
                     match listener.accept() {
                         Ok((stream, addr)) => {
-                            self.poll
-                                .registry()
-                                .reregister(listener, Self::LISTENER, Interest::READABLE)
-                                .expect("bug");
                             if !self.blacklist.contains(&addr.ip()) {
                                 self.register_stream(stream, addr, Interest::READABLE);
                             }

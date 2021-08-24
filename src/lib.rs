@@ -17,3 +17,5 @@ pub use self::proposer::Proposer;
 
 mod managed_stream;
 pub use self::managed_stream::{ReadOnce, WriteOnce};
+
+mod marked_stream;

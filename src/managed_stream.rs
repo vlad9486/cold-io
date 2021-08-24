@@ -8,20 +8,7 @@ use std::{
     net::Shutdown,
 };
 use mio::{Token, Interest, net::TcpStream};
-
-pub struct MarkedStream {
-    stream: TcpStream,
-    reader: bool,
-    reader_discarded: bool,
-    writer: bool,
-    writer_discarded: bool,
-}
-
-impl AsMut<TcpStream> for MarkedStream {
-    fn as_mut(&mut self) -> &mut TcpStream {
-        &mut self.stream
-    }
-}
+use super::marked_stream::MarkedStream;
 
 pub struct ManagedStream {
     inner: Rc<RefCell<MarkedStream>>,
