@@ -14,7 +14,7 @@ It containing random number generator, elapsed time from previous proposal and o
 
 * Wake - The first message that `Proposer` sends to the state machine. It needed for the state machine to provide a first request.
 * Idle - The message that means nothing happened during some time.
-* OnReadable/OnWritable - Some remove peer is ready to transmit/receive data. With this message a managed stream is provided. This object can be used only once.
+* OnReadable/OnWritable - Some remote peer is ready to transmit/receive data. With this message a managed stream is provided. This object can be used only once.
 
 ## Managed Stream
 
