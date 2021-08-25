@@ -4,76 +4,88 @@
 use std::{net::SocketAddr, collections::BTreeMap};
 use cold_io::{Proposal, ProposalKind, Proposer, Request, ConnectionSource, State, ReadOnce, WriteOnce};
 
-#[derive(Default)]
-struct ExampleState {
-    connections: BTreeMap<SocketAddr, (Option<ReadOnce>, Option<WriteOnce>)>,
+struct ExampleState<R, W>
+where
+    R: ReadOnce,
+    W: WriteOnce,
+{
+    connections: BTreeMap<SocketAddr, (Option<R>, Option<W>)>,
     received_terminate: bool,
 }
 
-impl ExampleState {
+impl<R, W> ExampleState<R, W>
+where
+    R: ReadOnce,
+    W: WriteOnce,
+{
     fn can_terminate(&self) -> bool {
         self.received_terminate && self.connections.is_empty()
     }
 }
 
-impl State for ExampleState {
+impl<R, W> State<R, W> for ExampleState<R, W>
+where
+    R: ReadOnce,
+    W: WriteOnce,
+{
     type ProposalExt = &'static str;
 
-    fn accept_proposal<R>(&mut self, proposal: Proposal<R, Self::ProposalExt>) -> Request
+    fn accept_proposal<Rng>(&mut self, proposal: Proposal<Rng, R, W, Self::ProposalExt>) -> Request
     where
-        R: rand::Rng,
+        Rng: rand::RngCore,
     {
-        let empty_request = Request::default();
-
         log::info!("{}", proposal);
 
         match proposal.kind {
-            ProposalKind::Wake => empty_request.set_source(ConnectionSource::Port(8224)),
+            ProposalKind::Wake => Request::default().set_source(ConnectionSource::Port(8224)),
             ProposalKind::Idle => {
                 if self.received_terminate {
                     if let Some((&addr, _)) = self.connections.iter().next() {
                         log::info!("will disconnect: {}", addr);
-                        if let Some((reader, writer)) = self.connections.remove(&addr) {
-                            reader.map(ReadOnce::discard);
-                            writer.map(WriteOnce::discard);
-                        }
-                        return empty_request;
+                        self.connections.remove(&addr);
                     }
                 }
-                empty_request
+                Request::default()
             },
             ProposalKind::OnReadable(addr, once) => {
                 let (r, _) = self.connections.entry(addr).or_default();
                 *r = Some(once);
-                empty_request
+                Request::default()
             },
             ProposalKind::OnWritable(addr, once) => {
                 let (_, w) = self.connections.entry(addr).or_default();
                 *w = Some(once);
-                empty_request
+                Request::default()
             },
             ProposalKind::Custom("terminate") => {
                 self.received_terminate = true;
-                empty_request
+                Request::default()
             },
-            ProposalKind::Custom(_) => empty_request,
+            ProposalKind::Custom(_) => Request::default(),
         }
     }
 }
 
-#[derive(Default)]
-struct ClientState {
+struct ClientState<R, W>
+where
+    R: ReadOnce,
+    W: WriteOnce,
+{
     connected: bool,
-    writer: Option<WriteOnce>,
-    reader: Option<ReadOnce>,
+    writer: Option<W>,
+    reader: Option<R>,
 }
 
-impl State for ClientState {
+impl<R, W> State<R, W> for ClientState<R, W>
+where
+    R: ReadOnce,
+    W: WriteOnce,
+{
     type ProposalExt = &'static str;
 
-    fn accept_proposal<R>(&mut self, proposal: Proposal<R, Self::ProposalExt>) -> Request
+    fn accept_proposal<Rng>(&mut self, proposal: Proposal<Rng, R, W, Self::ProposalExt>) -> Request
     where
-        R: rand::Rng,
+        Rng: rand::RngCore,
     {
         match proposal.kind {
             ProposalKind::OnWritable(_, once) => {
@@ -123,7 +135,11 @@ fn main() {
                 thread::sleep(Duration::from_secs(1));
 
                 if running.load(Ordering::Relaxed) {
-                    let client = ClientState::default();
+                    let client = ClientState {
+                        connected: false,
+                        reader: None,
+                        writer: None,
+                    };
                     let client_proposer = Proposer::new(12345, 8).unwrap();
                     clients.push((client, client_proposer));
                 }
@@ -136,7 +152,10 @@ fn main() {
         })
     };
 
-    let mut server = ExampleState::default();
+    let mut server = ExampleState {
+        connections: BTreeMap::default(),
+        received_terminate: false,
+    };
     let mut proposer = Proposer::new(12345, 8).unwrap();
     while !server.can_terminate() {
         let running = running.load(Ordering::Relaxed);

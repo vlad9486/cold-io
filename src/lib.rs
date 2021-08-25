@@ -10,12 +10,10 @@ mod request;
 pub use self::request::{Request, ConnectionSource};
 
 mod proposal;
-pub use self::proposal::{Proposal, ProposalKind};
+pub use self::proposal::{Proposal, ProposalKind, ReadOnce, WriteOnce, IoResult};
 
 mod proposer;
 pub use self::proposer::Proposer;
 
 mod managed_stream;
-pub use self::managed_stream::{ReadOnce, WriteOnce};
-
 mod marked_stream;

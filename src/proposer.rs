@@ -17,7 +17,7 @@ use rand::{rngs::StdRng, SeedableRng};
 
 use super::{
     request::{Request, ConnectionSource},
-    managed_stream::ManagedStream,
+    managed_stream::{ManagedStream, TcpReadOnce, TcpWriteOnce},
     state::State,
     proposal::{Proposal, ProposalKind},
 };
@@ -67,9 +67,9 @@ impl Proposer {
         t
     }
 
-    fn send_proposal<S>(&mut self, state: &mut S, kind: ProposalKind<S::ProposalExt>)
+    fn send_proposal<S>(&mut self, state: &mut S, kind: ProposalKind<TcpReadOnce, TcpWriteOnce, S::ProposalExt>)
     where
-        S: State,
+        S: State<TcpReadOnce, TcpWriteOnce>,
     {
         use std::mem;
 
@@ -102,7 +102,6 @@ impl Proposer {
                 self.listener = Some(listener);
                 Ok(())
             },
-            ConnectionSource::Thread => unimplemented!(),
         }
     }
 
@@ -166,7 +165,7 @@ impl Proposer {
     /// Run the single iteration
     pub fn run<S>(&mut self, state: &mut S, timeout: Duration) -> Result<(), ProposerError>
     where
-        S: State,
+        S: State<TcpReadOnce, TcpWriteOnce>,
     {
         if self.started {
             self.run_inner::<S>(state, timeout)
@@ -179,7 +178,7 @@ impl Proposer {
 
     fn run_inner<S>(&mut self, state: &mut S, timeout: Duration) -> Result<(), ProposerError>
     where
-        S: State,
+        S: State<TcpReadOnce, TcpWriteOnce>,
     {
         let mut error = ProposerError::default();
 

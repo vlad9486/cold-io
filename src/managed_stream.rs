@@ -8,7 +8,7 @@ use std::{
     net::Shutdown,
 };
 use mio::{Token, Interest, net::TcpStream};
-use super::marked_stream::MarkedStream;
+use super::{marked_stream::MarkedStream, proposal::{ReadOnce, WriteOnce, IoResult}};
 
 pub struct ManagedStream {
     inner: Rc<RefCell<MarkedStream>>,
@@ -29,21 +29,21 @@ impl ManagedStream {
         }
     }
 
-    pub fn write_once(&self) -> Option<WriteOnce> {
+    pub fn write_once(&self) -> Option<TcpWriteOnce> {
         let mut s = self.inner.borrow_mut();
         if !s.writer && !s.writer_discarded {
             s.writer = true;
-            Some(WriteOnce(Rc::downgrade(&self.inner)))
+            Some(TcpWriteOnce(Rc::downgrade(&self.inner)))
         } else {
             None
         }
     }
 
-    pub fn read_once(&self) -> Option<ReadOnce> {
+    pub fn read_once(&self) -> Option<TcpReadOnce> {
         let mut s = self.inner.borrow_mut();
         if !s.reader && !s.reader_discarded {
             s.reader = true;
-            Some(ReadOnce(Rc::downgrade(&self.inner)))
+            Some(TcpReadOnce(Rc::downgrade(&self.inner)))
         } else {
             None
         }
@@ -90,86 +90,89 @@ impl ManagedStream {
     }
 }
 
-#[must_use = "discard it if don't need"]
-pub struct WriteOnce(Weak<RefCell<MarkedStream>>);
+pub struct TcpWriteOnce(Weak<RefCell<MarkedStream>>);
 
-impl WriteOnce {
-    pub fn write(self, data: &[u8]) -> io::Result<()> {
+impl WriteOnce for TcpWriteOnce {
+    fn write(self, data: &[u8]) -> IoResult {
         if let Some(s) = self.0.upgrade() {
             let mut s = s.borrow_mut();
-            s.as_mut().write_all(data)?;
-            s.as_mut().flush()
+            let will_close = s.writer_discarded;
+            match s.as_mut().write(data) {
+                Ok(length) => IoResult::Done { length, will_close },
+                Err(error) => {
+                    log::error!("io error: {}", error);
+                    match error.kind() {
+                        io::ErrorKind::NotConnected => IoResult::Closed,
+                        io::ErrorKind::WouldBlock => IoResult::Done { length: 0, will_close },
+                        _ => {
+                            IoResult::Closed
+                        }
+                    }
+                }
+            }
         } else {
-            Err(io::ErrorKind::NotConnected.into())
-        }
-    }
-
-    pub fn write_last(self, data: &[u8]) -> io::Result<()> {
-        if let Some(s) = self.0.upgrade() {
-            let mut s = s.borrow_mut();
-            s.as_mut().write_all(data)?;
-            s.writer_discarded = true;
-            s.as_mut().shutdown(Shutdown::Write)
-        } else {
-            Err(io::ErrorKind::NotConnected.into())
-        }
-    }
-
-    pub fn discard(self) -> io::Result<()> {
-        if let Some(s) = self.0.upgrade() {
-            let mut s = s.borrow_mut();
-            s.writer_discarded = true;
-            s.as_mut().shutdown(Shutdown::Write)
-        } else {
-            Ok(())
+            IoResult::Closed
         }
     }
 }
 
-impl Drop for WriteOnce {
+impl Drop for TcpWriteOnce {
     fn drop(&mut self) {
         if let Some(s) = self.0.upgrade() {
-            s.borrow_mut().writer = false;
+            let mut s = s.borrow_mut();
+            s.writer_discarded = true;
+            s.writer = false;
+            if let Err(error) = s.as_mut().shutdown(Shutdown::Write) {
+                // it is expected the socket is not connected,
+                // don't report this case
+                if !matches!(error.kind(), io::ErrorKind::NotConnected) {
+                    log::error!("io error: {}", error);
+                }
+            }
         }
     }
 }
 
 #[must_use = "discard it if don't need"]
-pub struct ReadOnce(Weak<RefCell<MarkedStream>>);
+pub struct TcpReadOnce(Weak<RefCell<MarkedStream>>);
 
-impl ReadOnce {
-    pub fn read(self, buf: &mut [u8]) -> io::Result<DidRead> {
+impl ReadOnce for TcpReadOnce {
+    fn read(self, buf: &mut [u8]) -> IoResult {
         if let Some(s) = self.0.upgrade() {
             let mut s = s.borrow_mut();
-            s.stream.read(buf).map(|length| DidRead {
-                length,
-                end: s.reader_discarded,
-            })
+            let will_close = s.writer_discarded;
+            match s.as_mut().read(buf) {
+                Ok(length) => IoResult::Done { length, will_close },
+                Err(error) => {
+                    log::error!("io error: {}", error);
+                    match error.kind() {
+                        io::ErrorKind::NotConnected => IoResult::Closed,
+                        io::ErrorKind::WouldBlock => IoResult::Done { length: 0, will_close },
+                        _ => {
+                            IoResult::Closed
+                        }
+                    }
+                }
+            }
         } else {
-            Err(io::ErrorKind::NotConnected.into())
+            IoResult::Closed
         }
     }
+}
 
-    pub fn discard(self) -> io::Result<()> {
+impl Drop for TcpReadOnce {
+    fn drop(&mut self) {
         if let Some(s) = self.0.upgrade() {
             let mut s = s.borrow_mut();
             s.reader_discarded = true;
-            s.as_mut().shutdown(Shutdown::Read)
-        } else {
-            Ok(())
+            s.reader = false;
+            if let Err(error) = s.as_mut().shutdown(Shutdown::Read) {
+                // it is expected the socket is not connected,
+                // don't report this case
+                if !matches!(error.kind(), io::ErrorKind::NotConnected) {
+                    log::error!("io error: {}", error);
+                }
+            }
         }
     }
-}
-
-impl Drop for ReadOnce {
-    fn drop(&mut self) {
-        if let Some(s) = self.0.upgrade() {
-            s.borrow_mut().reader = false;
-        }
-    }
-}
-
-pub struct DidRead {
-    pub length: usize,
-    pub end: bool,
 }

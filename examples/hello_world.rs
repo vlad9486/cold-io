@@ -1,7 +1,7 @@
 // Copyright 2021 Vladislav Melnik
 // SPDX-License-Identifier: MIT
 
-use cold_io::{Proposal, ProposalKind, Proposer, Request, ConnectionSource, State};
+use cold_io::{Proposal, ProposalKind, Proposer, Request, ConnectionSource, State, ReadOnce, WriteOnce, IoResult};
 
 #[derive(Clone, Copy)]
 enum ExampleState<const INITIATOR: bool> {
@@ -15,12 +15,16 @@ impl<const INITIATOR: bool> ExampleState<INITIATOR> {
     }
 }
 
-impl<const INITIATOR: bool> State for ExampleState<INITIATOR> {
+impl<R, W, const INITIATOR: bool> State<R, W> for ExampleState<INITIATOR>
+where
+    R: ReadOnce,
+    W: WriteOnce,
+{
     type ProposalExt = &'static str;
 
-    fn accept_proposal<R>(&mut self, proposal: Proposal<R, Self::ProposalExt>) -> Request
+    fn accept_proposal<Rng>(&mut self, proposal: Proposal<Rng, R, W, Self::ProposalExt>) -> Request
     where
-        R: rand::Rng,
+        Rng: rand::RngCore,
     {
         use self::ExampleState::*;
         use std::str;
@@ -45,25 +49,37 @@ impl<const INITIATOR: bool> State for ExampleState<INITIATOR> {
             (Empty, ProposalKind::OnReadable(addr, once)) => {
                 if !INITIATOR {
                     let mut buf = [0; 13];
-                    let rd = once.read(&mut buf).unwrap();
-                    let msg = str::from_utf8(&buf[..rd.length]).unwrap();
-                    log::info!("{} -> {:?}", addr, msg);
-                    *self = Done;
-                    Request::default()
+                    if let IoResult::Done { length, .. } = once.read(&mut buf) {
+                        let msg = str::from_utf8(&buf[..length]).unwrap();
+                        log::info!("{} -> {:?}", addr, msg);
+                        *self = Done;
+                        Request::default()
+                    } else {
+                        // we did not done the task, and connection is closed
+                        // let's keep the same state
+                        Request::default()
+                    }
                 } else {
-                    once.discard().unwrap();
+                    // just to be explicit in real code, can omit this `drop`
+                    // drop the `once` object, will close the reading half of the connection
+                    drop(once);
                     Request::default()
                 }
             },
             (Empty, ProposalKind::OnWritable(addr, once)) => {
                 if INITIATOR {
                     let msg = "hello, world!";
-                    once.write(msg.as_bytes()).unwrap();
-                    log::info!("{} <- {:?}", addr, msg);
-                    *self = Done;
-                    Request::default()
+                    if let IoResult::Done { .. } = once.write(msg.as_bytes()) {
+                        log::info!("{} <- {:?}", addr, msg);
+                        *self = Done;
+                        Request::default()
+                    } else {
+                        // we did not done the task, and connection is closed
+                        // let's try connect again
+                        Request::default().add_connect(ADDRESS)
+                    }
                 } else {
-                    once.discard().unwrap();
+                    drop(once);
                     Request::default()
                 }
             },

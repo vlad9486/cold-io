@@ -2,24 +2,33 @@
 // SPDX-License-Identifier: MIT
 
 use std::{time::Duration, net::SocketAddr, fmt};
-use super::managed_stream::{ReadOnce, WriteOnce};
+
+pub trait ReadOnce {
+    fn read(self, buf: &mut [u8]) -> IoResult;
+}
+
+pub trait WriteOnce {
+    fn write(self, data: &[u8]) -> IoResult;
+}
+
+pub enum IoResult {
+    Closed,
+    Done {
+        length: usize,
+        will_close: bool,
+    },
+}
 
 /// The proposal is the input to the state machine.
 /// It provides timer, io, random number generator, and user-defined data.
-pub struct Proposal<R, E>
-where
-    R: rand::Rng,
-{
-    pub rng: R,
+pub struct Proposal<Rng, R, W, E> {
+    pub rng: Rng,
     pub elapsed: Duration,
-    pub kind: ProposalKind<E>,
+    pub kind: ProposalKind<R, W, E>,
 }
 
-impl<R, E> Proposal<R, E>
-where
-    R: rand::Rng,
-{
-    pub fn custom(rng: R, ext: E) -> Self {
+impl<Rng, R, W, E> Proposal<Rng, R, W, E> {
+    pub fn custom(rng: Rng, ext: E) -> Self {
         Proposal {
             rng,
             elapsed: Duration::ZERO,
@@ -28,23 +37,22 @@ where
     }
 }
 
-pub enum ProposalKind<E> {
+pub enum ProposalKind<R, W, E> {
     /// Wake the state machine, useful if the state machine
     /// needs to request something before it receives any event
     Wake,
     /// Nothing happened during a time quant
     Idle,
     /// The remote peer can provide data.
-    OnReadable(SocketAddr, ReadOnce),
+    OnReadable(SocketAddr, R),
     /// The remote peer can accept data.
-    OnWritable(SocketAddr, WriteOnce),
+    OnWritable(SocketAddr, W),
     /// User-defined
     Custom(E),
 }
 
-impl<R, E> fmt::Display for Proposal<R, E>
+impl<Rng, R, W, E> fmt::Display for Proposal<Rng, R, W, E>
 where
-    R: rand::Rng,
     E: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -52,7 +60,7 @@ where
     }
 }
 
-impl<E> fmt::Display for ProposalKind<E>
+impl<R, W, E> fmt::Display for ProposalKind<R, W, E>
 where
     E: fmt::Display,
 {

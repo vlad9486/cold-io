@@ -96,8 +96,6 @@ pub enum ConnectionSource {
     None,
     /// Listen at port
     Port(u16),
-    /// Listen from neighbor thread
-    Thread,
 }
 
 impl fmt::Display for ConnectionSource {
@@ -105,7 +103,6 @@ impl fmt::Display for ConnectionSource {
         match self {
             ConnectionSource::None => write!(f, "none"),
             ConnectionSource::Port(port) => write!(f, "port({})", port),
-            ConnectionSource::Thread => write!(f, "thread"),
         }
     }
 }
