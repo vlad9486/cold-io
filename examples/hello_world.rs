@@ -99,7 +99,7 @@ fn main() {
 
     let r_thread = thread::spawn(move || {
         let mut responder = TimeTracker::new(iter::repeat(()), ExampleState::<false>::Empty);
-        let mut proposer = Proposer::new(1, 8).unwrap();
+        let mut proposer = Proposer::new(1, 8);
         while !responder.as_mut().can_terminate() {
             proposer
                 .run(&mut responder, Duration::from_secs(1))
@@ -109,7 +109,7 @@ fn main() {
     thread::sleep(Duration::from_millis(100));
 
     let mut initiator = TimeTracker::new(iter::repeat(()), ExampleState::<true>::Empty);
-    let mut proposer = Proposer::new(0, 8).unwrap();
+    let mut proposer = Proposer::new(0, 8);
     while !initiator.as_mut().can_terminate() {
         proposer
             .run(&mut initiator, Duration::from_secs(1))

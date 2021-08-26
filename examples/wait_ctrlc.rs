@@ -146,7 +146,7 @@ fn main() {
                             writer: None,
                         },
                     );
-                    let client_proposer = Proposer::new(clients.len() as u16 + 1, 8).unwrap();
+                    let client_proposer = Proposer::new(clients.len() as u16 + 1, 8);
                     clients.push((client, client_proposer));
                 }
                 for (client, client_proposer) in &mut clients {
@@ -165,7 +165,7 @@ fn main() {
             received_terminate: false,
         },
     );
-    let mut proposer = Proposer::new(0, 8).unwrap();
+    let mut proposer = Proposer::new(0, 8);
     while !server.as_mut().can_terminate() {
         let running = running.load(Ordering::Relaxed);
 

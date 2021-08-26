@@ -15,6 +15,9 @@ pub use self::proposal::{Proposal, ProposalKind, ConnectionId, ReadOnce, WriteOn
 mod proposer;
 pub use self::proposer::Proposer;
 
+mod proposer_error;
+pub use self::proposer_error::ProposerError;
+
 mod managed_stream;
 mod marked_stream;
 
