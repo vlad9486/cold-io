@@ -11,24 +11,23 @@ pub trait WriteOnce {
     fn write(self, data: &[u8]) -> IoResult;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[must_use = "need to know how many bytes was actually read or written"]
 pub enum IoResult {
     Closed,
-    Done {
-        length: usize,
-        will_close: bool,
-    },
+    Done { length: usize, will_close: bool },
 }
 
 /// The proposal is the input to the state machine.
 /// It provides timer, io, random number generator, and user-defined data.
-pub struct Proposal<Rng, R, W, E> {
+pub struct Proposal<R, W, Ext, Rng> {
     pub rng: Rng,
     pub elapsed: Duration,
-    pub kind: ProposalKind<R, W, E>,
+    pub kind: ProposalKind<R, W, Ext>,
 }
 
-impl<Rng, R, W, E> Proposal<Rng, R, W, E> {
-    pub fn custom(rng: Rng, ext: E) -> Self {
+impl<R, W, Ext, Rng> Proposal<R, W, Ext, Rng> {
+    pub fn custom(rng: Rng, ext: Ext) -> Self {
         Proposal {
             rng,
             elapsed: Duration::ZERO,
@@ -37,40 +36,65 @@ impl<Rng, R, W, E> Proposal<Rng, R, W, E> {
     }
 }
 
-pub enum ProposalKind<R, W, E> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConnectionId {
+    pub poll_id: u16,
+    pub token: u16,
+}
+
+pub enum ProposalKind<R, W, Ext> {
     /// Wake the state machine, useful if the state machine
     /// needs to request something before it receives any event
     Wake,
     /// Nothing happened during a time quant
     Idle,
+    /// New connection
+    Connection {
+        addr: SocketAddr,
+        incoming: bool,
+        id: ConnectionId,
+    },
     /// The remote peer can provide data.
-    OnReadable(SocketAddr, R),
+    OnReadable(ConnectionId, R),
     /// The remote peer can accept data.
-    OnWritable(SocketAddr, W),
+    OnWritable(ConnectionId, W),
     /// User-defined
-    Custom(E),
+    Custom(Ext),
 }
 
-impl<Rng, R, W, E> fmt::Display for Proposal<Rng, R, W, E>
+impl<R, W, Ext, Rng> fmt::Display for Proposal<R, W, Ext, Rng>
 where
-    E: fmt::Display,
+    Ext: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "elapsed: {:?}, {}", self.elapsed, self.kind)
     }
 }
 
-impl<R, W, E> fmt::Display for ProposalKind<R, W, E>
+impl<R, W, Ext> fmt::Display for ProposalKind<R, W, Ext>
 where
-    E: fmt::Display,
+    Ext: fmt::Display,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProposalKind::Wake => write!(f, "wake"),
             ProposalKind::Idle => write!(f, "idle..."),
-            ProposalKind::OnReadable(addr, _) => write!(f, "local peer can read from {}", addr),
-            ProposalKind::OnWritable(addr, _) => write!(f, "local peer can write to {}", addr),
+            ProposalKind::Connection { addr, incoming, id } => {
+                if *incoming {
+                    write!(f, "new incoming connection: {}, addr: {}", id, addr)
+                } else {
+                    write!(f, "new outgoing connection: {}, addr: {}", id, addr)
+                }
+            },
+            ProposalKind::OnReadable(id, _) => write!(f, "local peer can read from {}", id),
+            ProposalKind::OnWritable(id, _) => write!(f, "local peer can write to {}", id),
             ProposalKind::Custom(ext) => write!(f, "{}", ext),
         }
+    }
+}
+
+impl fmt::Display for ConnectionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{:04x}.{:04x}", self.poll_id, self.token)
     }
 }

@@ -13,13 +13,12 @@ use mio::{
     net::{TcpListener, TcpStream},
     Interest,
 };
-use rand::{rngs::StdRng, SeedableRng};
 
 use super::{
     request::{Request, ConnectionSource},
     managed_stream::{ManagedStream, TcpReadOnce, TcpWriteOnce},
     state::State,
-    proposal::{Proposal, ProposalKind},
+    proposal::{Proposal, ProposalKind, ConnectionId},
 };
 
 /// The proposer serves the state's requests and provides network events to it.
@@ -30,7 +29,7 @@ pub struct Proposer {
     events_capacity: usize,
     events: Events,
     last: Instant,
-    rng: StdRng,
+    id: u16,
     listener: Option<TcpListener>,
     streams: BTreeMap<SocketAddr, ManagedStream>,
     in_progress: BTreeMap<Token, SocketAddr>,
@@ -42,7 +41,7 @@ impl Proposer {
     const LISTENER: Token = Token(usize::MAX);
 
     /// Set the seed for the random number generator.
-    pub fn new(seed: u64, events_capacity: usize) -> io::Result<Self> {
+    pub fn new(id: u16, events_capacity: usize) -> io::Result<Self> {
         let poll = Poll::new()?;
 
         Ok(Proposer {
@@ -52,7 +51,7 @@ impl Proposer {
             events_capacity,
             events: Events::with_capacity(events_capacity),
             last: Instant::now(),
-            rng: StdRng::seed_from_u64(seed),
+            id,
             listener: None,
             streams: BTreeMap::default(),
             in_progress: BTreeMap::default(),
@@ -67,20 +66,24 @@ impl Proposer {
         t
     }
 
-    fn send_proposal<S>(&mut self, state: &mut S, kind: ProposalKind<TcpReadOnce, TcpWriteOnce, S::ProposalExt>)
-    where
+    fn send_proposal<S>(
+        &mut self,
+        rng: S::Rng,
+        state: &mut S,
+        kind: ProposalKind<TcpReadOnce, TcpWriteOnce, S::Ext>,
+    ) where
         S: State<TcpReadOnce, TcpWriteOnce>,
     {
         use std::mem;
 
         let last = mem::replace(&mut self.last, Instant::now());
         let proposal = Proposal {
-            rng: &mut self.rng,
+            rng,
             elapsed: last.elapsed(),
             kind,
         };
 
-        self.request += state.accept_proposal(proposal)
+        self.request += state.accept(proposal);
     }
 
     fn set_source(&mut self, source: ConnectionSource) -> io::Result<()> {
@@ -117,7 +120,12 @@ impl Proposer {
         Ok(())
     }
 
-    fn register_stream(&mut self, stream: TcpStream, addr: SocketAddr, interests: Interest) {
+    fn register_stream(
+        &mut self,
+        stream: TcpStream,
+        addr: SocketAddr,
+        interests: Interest,
+    ) -> Token {
         let token = self.allocate_token();
         let stream = ManagedStream::new(stream, token);
         self.poll
@@ -126,14 +134,19 @@ impl Proposer {
             .expect("bug");
         self.streams.insert(addr, stream);
         self.in_progress.insert(token, addr);
+        token
     }
 
-    fn connect_peer(&mut self, addr: SocketAddr) -> io::Result<()> {
+    fn connect_peer(&mut self, addr: SocketAddr) -> io::Result<Option<Token>> {
         if !self.streams.contains_key(&addr) {
-            self.register_stream(TcpStream::connect(addr)?, addr, Interest::WRITABLE);
+            Ok(Some(self.register_stream(
+                TcpStream::connect(addr)?,
+                addr,
+                Interest::WRITABLE,
+            )))
+        } else {
+            Ok(None)
         }
-
-        Ok(())
     }
 
     fn reregister(&mut self) {
@@ -163,21 +176,33 @@ impl Proposer {
     }
 
     /// Run the single iteration
-    pub fn run<S>(&mut self, state: &mut S, timeout: Duration) -> Result<(), ProposerError>
+    pub fn run<Rngs, S>(
+        &mut self,
+        rngs: &mut Rngs,
+        state: &mut S,
+        timeout: Duration,
+    ) -> Result<(), ProposerError>
     where
+        Rngs: Iterator<Item = S::Rng>,
         S: State<TcpReadOnce, TcpWriteOnce>,
     {
         if self.started {
-            self.run_inner::<S>(state, timeout)
+            self.run_inner(rngs, state, timeout)
         } else {
             self.started = true;
-            self.send_proposal(state, ProposalKind::Wake);
+            self.send_proposal(rngs.next().unwrap(), state, ProposalKind::Wake);
             Ok(())
         }
     }
 
-    fn run_inner<S>(&mut self, state: &mut S, timeout: Duration) -> Result<(), ProposerError>
+    fn run_inner<Rngs, S>(
+        &mut self,
+        rngs: &mut Rngs,
+        state: &mut S,
+        timeout: Duration,
+    ) -> Result<(), ProposerError>
     where
+        Rngs: Iterator<Item = S::Rng>,
         S: State<TcpReadOnce, TcpWriteOnce>,
     {
         let mut error = ProposerError::default();
@@ -198,8 +223,20 @@ impl Proposer {
         self.reregister();
 
         for addr in self.request.take_connects() {
-            if let Err(e) = self.connect_peer(addr) {
-                error.connect_errors.push((addr, e));
+            match self.connect_peer(addr) {
+                Err(e) => error.connect_errors.push((addr, e)),
+                Ok(None) => (),
+                Ok(Some(token)) => {
+                    let kind = ProposalKind::Connection {
+                        addr,
+                        incoming: true,
+                        id: ConnectionId {
+                            poll_id: self.id,
+                            token: token.0 as u16,
+                        },
+                    };
+                    self.send_proposal(rngs.next().unwrap(), state, kind);
+                },
             }
         }
 
@@ -215,7 +252,7 @@ impl Proposer {
 
         let events = self.take_events();
         if events.is_empty() {
-            self.send_proposal(state, ProposalKind::Idle);
+            self.send_proposal(rngs.next().unwrap(), state, ProposalKind::Idle);
         }
         for event in events.into_iter() {
             if event.token() == Self::LISTENER {
@@ -223,7 +260,16 @@ impl Proposer {
                     match listener.accept() {
                         Ok((stream, addr)) => {
                             if !self.blacklist.contains(&addr.ip()) {
-                                self.register_stream(stream, addr, Interest::READABLE);
+                                let token = self.register_stream(stream, addr, Interest::READABLE);
+                                let kind = ProposalKind::Connection {
+                                    addr,
+                                    incoming: true,
+                                    id: ConnectionId {
+                                        poll_id: self.id,
+                                        token: token.0 as u16,
+                                    },
+                                };
+                                self.send_proposal(rngs.next().unwrap(), state, kind);
                             }
                         },
                         Err(e) => {
@@ -233,10 +279,14 @@ impl Proposer {
                 }
             } else if let Some(addr) = self.in_progress.remove(&event.token()) {
                 let stream = self.streams.get(&addr).unwrap();
+                let id = ConnectionId {
+                    poll_id: self.id,
+                    token: stream.token().0 as u16,
+                };
                 let mut pr = Vec::with_capacity(2);
                 if event.is_writable() {
                     if let Some(w) = stream.write_once() {
-                        pr.push(ProposalKind::OnWritable(addr, w));
+                        pr.push(ProposalKind::OnWritable(id, w));
                         if event.is_write_closed() {
                             stream.set_write_closed();
                         }
@@ -246,7 +296,7 @@ impl Proposer {
                 }
                 if event.is_readable() {
                     if let Some(r) = stream.read_once() {
-                        pr.push(ProposalKind::OnReadable(addr, r));
+                        pr.push(ProposalKind::OnReadable(id, r));
                         if event.is_read_closed() {
                             stream.set_read_closed();
                         }
@@ -255,16 +305,12 @@ impl Proposer {
                     }
                 }
                 for pr in pr {
-                    self.send_proposal(state, pr);
+                    self.send_proposal(rngs.next().unwrap(), state, pr);
                 }
             }
         }
 
-        if error.is_empty() {
-            Ok(())
-        } else {
-            Err(error)
-        }
+        error.into_result()
     }
 }
 
@@ -302,6 +348,14 @@ impl fmt::Display for ProposerError {
 impl Error for ProposerError {}
 
 impl ProposerError {
+    pub fn into_result(self) -> Result<(), Self> {
+        if self.is_empty() {
+            Ok(())
+        } else {
+            Err(self)
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.listen_error.is_none()
             && self.connect_errors.is_empty()

@@ -18,9 +18,9 @@ It containing random number generator, elapsed time from previous proposal and o
 
 ## Managed Stream
 
-The state machine receive `ReadOnce` object along with `OnReadable` event. The state machine can read it, or discard, or store for further use. The proposer will not send another `ReadOnce` until previous did not consumed. It can be dropped, but it is a wast of time, because proposer will resend it. If the state machine discard the object, the `TcpStream` will be closed. If the state machine read the object, it will know how many bytes was read, and whether there will be more.
+The state machine receive `ReadOnce` object along with `OnReadable` event. The state machine can read it, or drop, or store for further use. The proposer will not send another `ReadOnce` until previous did not consumed. It can be dropped and the connection part (read or write) will be closed. If the state machine read the object, it will know how many bytes was read, and whether there will be more.
 
-The state machine receive `WriteOnce` object along with `OnWritable` event. It is very similar to `ReadOnce`. Except it is possible to explicitly close the connection after write. So it has `write` method, and `write_last` which means we don't want to write more and the connection will be closed.
+The state machine receive `WriteOnce` object along with `OnWritable` event. It is very similar to `ReadOnce`.
 
 ## Request
 

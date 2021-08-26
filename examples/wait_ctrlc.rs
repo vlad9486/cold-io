@@ -1,15 +1,18 @@
 // Copyright 2021 Vladislav Melnik
 // SPDX-License-Identifier: MIT
 
-use std::{net::SocketAddr, collections::BTreeMap};
-use cold_io::{Proposal, ProposalKind, Proposer, Request, ConnectionSource, State, ReadOnce, WriteOnce};
+use std::collections::BTreeMap;
+use cold_io::{
+    Proposal, ProposalKind, ConnectionId, Proposer, Request, ConnectionSource, State, ReadOnce,
+    WriteOnce,
+};
 
 struct ExampleState<R, W>
 where
     R: ReadOnce,
     W: WriteOnce,
 {
-    connections: BTreeMap<SocketAddr, (Option<R>, Option<W>)>,
+    connections: BTreeMap<ConnectionId, (Option<R>, Option<W>)>,
     received_terminate: bool,
 }
 
@@ -28,12 +31,11 @@ where
     R: ReadOnce,
     W: WriteOnce,
 {
-    type ProposalExt = &'static str;
+    type Ext = &'static str;
 
-    fn accept_proposal<Rng>(&mut self, proposal: Proposal<Rng, R, W, Self::ProposalExt>) -> Request
-    where
-        Rng: rand::RngCore,
-    {
+    type Rng = ();
+
+    fn accept(&mut self, proposal: Proposal<R, W, Self::Ext, Self::Rng>) -> Request {
         log::info!("{}", proposal);
 
         match proposal.kind {
@@ -47,13 +49,14 @@ where
                 }
                 Request::default()
             },
-            ProposalKind::OnReadable(addr, once) => {
-                let (r, _) = self.connections.entry(addr).or_default();
+            ProposalKind::Connection { .. } => Request::default(),
+            ProposalKind::OnReadable(id, once) => {
+                let (r, _) = self.connections.entry(id).or_default();
                 *r = Some(once);
                 Request::default()
             },
-            ProposalKind::OnWritable(addr, once) => {
-                let (_, w) = self.connections.entry(addr).or_default();
+            ProposalKind::OnWritable(id, once) => {
+                let (_, w) = self.connections.entry(id).or_default();
                 *w = Some(once);
                 Request::default()
             },
@@ -81,12 +84,11 @@ where
     R: ReadOnce,
     W: WriteOnce,
 {
-    type ProposalExt = &'static str;
+    type Ext = &'static str;
 
-    fn accept_proposal<Rng>(&mut self, proposal: Proposal<Rng, R, W, Self::ProposalExt>) -> Request
-    where
-        Rng: rand::RngCore,
-    {
+    type Rng = ();
+
+    fn accept(&mut self, proposal: Proposal<R, W, Self::Ext, Self::Rng>) -> Request {
         match proposal.kind {
             ProposalKind::OnWritable(_, once) => {
                 self.writer = Some(once);
@@ -114,6 +116,7 @@ fn main() {
             Arc,
             atomic::{Ordering, AtomicBool},
         },
+        iter,
     };
 
     env_logger::init();
@@ -130,6 +133,7 @@ fn main() {
         let keep_clients = keep_clients.clone();
         let running = running.clone();
         thread::spawn(move || {
+            let mut rngs = iter::repeat(());
             let mut clients = Vec::new();
             while keep_clients.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_secs(1));
@@ -140,12 +144,12 @@ fn main() {
                         reader: None,
                         writer: None,
                     };
-                    let client_proposer = Proposer::new(12345, 8).unwrap();
+                    let client_proposer = Proposer::new(clients.len() as u16 + 1, 8).unwrap();
                     clients.push((client, client_proposer));
                 }
                 for (client, client_proposer) in &mut clients {
                     client_proposer
-                        .run(client, Duration::from_millis(100))
+                        .run(&mut rngs, client, Duration::from_millis(100))
                         .unwrap();
                 }
             }
@@ -156,16 +160,17 @@ fn main() {
         connections: BTreeMap::default(),
         received_terminate: false,
     };
-    let mut proposer = Proposer::new(12345, 8).unwrap();
+    let mut rngs = iter::repeat(());
+    let mut proposer = Proposer::new(0, 8).unwrap();
     while !server.can_terminate() {
         let running = running.load(Ordering::Relaxed);
 
         if !running {
-            server.accept_proposal(Proposal::custom(rand::thread_rng(), "terminate"));
+            server.accept(Proposal::custom((), "terminate"));
         }
 
         proposer
-            .run(&mut server, Duration::from_millis(500))
+            .run(&mut rngs, &mut server, Duration::from_millis(500))
             .unwrap();
     }
 

@@ -7,8 +7,10 @@ pub struct MarkedStream {
     pub stream: TcpStream,
     pub reader: bool,
     pub reader_discarded: bool,
+    pub reader_used: bool,
     pub writer: bool,
     pub writer_discarded: bool,
+    pub writer_used: bool,
 }
 
 impl AsMut<TcpStream> for MarkedStream {
