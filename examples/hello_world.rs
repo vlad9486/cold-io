@@ -3,7 +3,7 @@
 
 use cold_io::{
     Proposal, ProposalKind, Proposer, Request, ConnectionSource, State, ReadOnce, WriteOnce,
-    IoResult,
+    IoResult, TimeTracker,
 };
 
 #[derive(Clone, Copy)]
@@ -98,23 +98,21 @@ fn main() {
     env_logger::init();
 
     let r_thread = thread::spawn(move || {
-        let mut rngs = iter::repeat(());
-        let mut responder = ExampleState::<false>::Empty;
+        let mut responder = TimeTracker::new(iter::repeat(()), ExampleState::<false>::Empty);
         let mut proposer = Proposer::new(1, 8).unwrap();
-        while !responder.can_terminate() {
+        while !responder.as_mut().can_terminate() {
             proposer
-                .run(&mut rngs, &mut responder, Duration::from_secs(1))
+                .run(&mut responder, Duration::from_secs(1))
                 .unwrap();
         }
     });
     thread::sleep(Duration::from_millis(100));
 
-    let mut rngs = iter::repeat(());
-    let mut initiator = ExampleState::<true>::Empty;
+    let mut initiator = TimeTracker::new(iter::repeat(()), ExampleState::<true>::Empty);
     let mut proposer = Proposer::new(0, 8).unwrap();
-    while !initiator.can_terminate() {
+    while !initiator.as_mut().can_terminate() {
         proposer
-            .run(&mut rngs, &mut initiator, Duration::from_secs(1))
+            .run(&mut initiator, Duration::from_secs(1))
             .unwrap();
     }
 

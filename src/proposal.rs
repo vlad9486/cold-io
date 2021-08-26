@@ -26,16 +26,6 @@ pub struct Proposal<R, W, Ext, Rng> {
     pub kind: ProposalKind<R, W, Ext>,
 }
 
-impl<R, W, Ext, Rng> Proposal<R, W, Ext, Rng> {
-    pub fn custom(rng: Rng, ext: Ext) -> Self {
-        Proposal {
-            rng,
-            elapsed: Duration::ZERO,
-            kind: ProposalKind::Custom(ext),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ConnectionId {
     pub poll_id: u16,
@@ -79,13 +69,16 @@ where
         match self {
             ProposalKind::Wake => write!(f, "wake"),
             ProposalKind::Idle => write!(f, "idle..."),
-            ProposalKind::Connection { addr, incoming, id } => {
-                if *incoming {
-                    write!(f, "new incoming connection: {}, addr: {}", id, addr)
-                } else {
-                    write!(f, "new outgoing connection: {}, addr: {}", id, addr)
-                }
-            },
+            ProposalKind::Connection {
+                addr,
+                incoming: true,
+                id,
+            } => write!(f, "new incoming connection: {}, addr: {}", id, addr),
+            ProposalKind::Connection {
+                addr,
+                incoming: false,
+                id,
+            } => write!(f, "new outgoing connection: {}, addr: {}", id, addr),
             ProposalKind::OnReadable(id, _) => write!(f, "local peer can read from {}", id),
             ProposalKind::OnWritable(id, _) => write!(f, "local peer can write to {}", id),
             ProposalKind::Custom(ext) => write!(f, "{}", ext),

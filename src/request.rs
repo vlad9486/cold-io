@@ -5,7 +5,7 @@ use std::{net::SocketAddr, mem, ops::AddAssign, fmt};
 use smallvec::SmallVec;
 
 /// The proposer will perform requests sequentially.
-/// First it setup source, then blacklists and then disconnect.
+/// First it setup source, then blacklists and then connect.
 #[derive(Default, Debug)]
 pub struct Request {
     source: Option<ConnectionSource>,

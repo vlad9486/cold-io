@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use cold_io::{
     Proposal, ProposalKind, ConnectionId, Proposer, Request, ConnectionSource, State, ReadOnce,
-    WriteOnce,
+    WriteOnce, TimeTracker,
 };
 
 struct ExampleState<R, W>
@@ -133,44 +133,48 @@ fn main() {
         let keep_clients = keep_clients.clone();
         let running = running.clone();
         thread::spawn(move || {
-            let mut rngs = iter::repeat(());
             let mut clients = Vec::new();
             while keep_clients.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_secs(1));
 
                 if running.load(Ordering::Relaxed) {
-                    let client = ClientState {
-                        connected: false,
-                        reader: None,
-                        writer: None,
-                    };
+                    let client = TimeTracker::new(
+                        iter::repeat(()),
+                        ClientState {
+                            connected: false,
+                            reader: None,
+                            writer: None,
+                        },
+                    );
                     let client_proposer = Proposer::new(clients.len() as u16 + 1, 8).unwrap();
                     clients.push((client, client_proposer));
                 }
                 for (client, client_proposer) in &mut clients {
                     client_proposer
-                        .run(&mut rngs, client, Duration::from_millis(100))
+                        .run(client, Duration::from_millis(100))
                         .unwrap();
                 }
             }
         })
     };
 
-    let mut server = ExampleState {
-        connections: BTreeMap::default(),
-        received_terminate: false,
-    };
-    let mut rngs = iter::repeat(());
+    let mut server = TimeTracker::new(
+        iter::repeat(()),
+        ExampleState {
+            connections: BTreeMap::default(),
+            received_terminate: false,
+        },
+    );
     let mut proposer = Proposer::new(0, 8).unwrap();
-    while !server.can_terminate() {
+    while !server.as_mut().can_terminate() {
         let running = running.load(Ordering::Relaxed);
 
         if !running {
-            server.accept(Proposal::custom((), "terminate"));
+            server.send(ProposalKind::Custom("terminate"));
         }
 
         proposer
-            .run(&mut rngs, &mut server, Duration::from_millis(500))
+            .run(&mut server, Duration::from_millis(500))
             .unwrap();
     }
 
